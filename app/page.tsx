@@ -179,75 +179,25 @@ export default function HomePage() {
         lastUpdated: new Date().toISOString(),
       });
 
+      body.append("house", selectedHouse);
+      body.append("screenshot", file);
+
       try {
-        if (!openAiKey) {
-          setStatusMessage(
-            "Kein API-Key hinterlegt. Bitte in der Konfiguration ergänzen."
-          );
-          setUploading(false);
-          return;
+        const headers = new Headers();
+        if (openAiKey) {
+          headers.set("x-openai-key", openAiKey);
         }
-
-        const response = await fetch("https://api.openai.com/v1/responses", {
+        const response = await fetch("/api/analyze", {
           method: "POST",
-          headers: {
-            Authorization: `Bearer ${openAiKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model: "gpt-4.1-mini",
-            input: [
-              {
-                role: "user",
-                content: [
-                  {
-                    type: "input_text",
-                    text:
-                      "Extrahiere das Haus, das geforderte Item, Contribution Points pro Item und die Belohnungsstufen aus dem Screenshot. Antworte als JSON mit den Feldern item, pointsPerItem und rewards (Array aus {points, reward}).",
-                  },
-                  {
-                    type: "input_image",
-                    image_url: dataUrl,
-                  },
-                ],
-              },
-            ],
-            response_format: {
-              type: "json_schema",
-              json_schema: {
-                name: "landsraad_task",
-                schema: {
-                  type: "object",
-                  properties: {
-                    item: { type: "string" },
-                    pointsPerItem: { type: "number" },
-                    rewards: {
-                      type: "array",
-                      items: {
-                        type: "object",
-                        properties: {
-                          points: { type: "number" },
-                          reward: { type: "string" },
-                        },
-                        required: ["points", "reward"],
-                      },
-                    },
-                  },
-                  required: ["item", "pointsPerItem", "rewards"],
-                },
-              },
-            },
-          }),
+          headers,
+          body,
         });
-
         const payload = await response.json();
-        const content = payload?.output?.[0]?.content?.[0]?.json;
-
-        if (response.ok && content) {
+        if (response.ok && payload?.task) {
           updateHouse(selectedHouse, {
-            item: content.item ?? "",
-            pointsPerItem: content.pointsPerItem ?? 0,
-            rewards: content.rewards ?? [],
+            item: payload.task.item ?? "",
+            pointsPerItem: payload.task.pointsPerItem ?? 0,
+            rewards: payload.task.rewards ?? [],
             lastUpdated: new Date().toISOString(),
           });
           setStatusMessage("Analyse erfolgreich gespeichert.");
