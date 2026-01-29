@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 type Reward = {
@@ -50,6 +51,7 @@ const getWeekKey = () => {
 };
 
 const STORAGE_PREFIX = "landsraad-week";
+const OPENAI_STORAGE_KEY = "landsraad-openai-key";
 
 const loadWeekData = (weekKey: string): WeekData => {
   if (typeof window === "undefined") {
@@ -87,6 +89,7 @@ export default function HomePage() {
   const [selectedHouse, setSelectedHouse] = useState("Varota");
   const [uploading, setUploading] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [openAiKey, setOpenAiKey] = useState<string | null>(null);
 
   useEffect(() => {
     const loaded = loadWeekData(weekKey);
@@ -104,6 +107,11 @@ export default function HomePage() {
     if (!weekData.weekKey) return;
     saveWeekData(weekData);
   }, [weekData]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setOpenAiKey(window.localStorage.getItem(OPENAI_STORAGE_KEY));
+  }, []);
 
   const updateHouse = (house: string, changes: Partial<HouseTask>) => {
     setWeekData((prev) => ({
@@ -176,8 +184,13 @@ export default function HomePage() {
       body.append("screenshot", file);
 
       try {
+        const headers = new Headers();
+        if (openAiKey) {
+          headers.set("x-openai-key", openAiKey);
+        }
         const response = await fetch("/api/analyze", {
           method: "POST",
+          headers,
           body,
         });
         const payload = await response.json();
@@ -368,7 +381,8 @@ export default function HomePage() {
         <p>
           Tipp: Ohne API-Key speichert die App die Screenshots lokal und lässt
           dich die Taskdaten manuell nachtragen. Für automatische Analyse den
-          API-Key in <code>OPENAI_API_KEY</code> setzen.
+          API-Key in der{" "}
+          <Link href="/config">Konfiguration</Link> hinterlegen.
         </p>
       </footer>
     </main>

@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const ENV_OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 export async function POST(request: NextRequest) {
   const formData = await request.formData();
   const screenshot = formData.get("screenshot");
+  const headerKey = request.headers.get("x-openai-key");
+  const openAiKey = headerKey || ENV_OPENAI_API_KEY;
 
   if (!screenshot || !(screenshot instanceof File)) {
     return NextResponse.json(
@@ -13,7 +15,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  if (!OPENAI_API_KEY) {
+  if (!openAiKey) {
     return NextResponse.json(
       {
         error:
@@ -29,7 +31,7 @@ export async function POST(request: NextRequest) {
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${OPENAI_API_KEY}`,
+      Authorization: `Bearer ${openAiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
