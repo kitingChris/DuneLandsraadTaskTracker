@@ -179,7 +179,6 @@ export default function HomePage() {
         lastUpdated: new Date().toISOString(),
       });
 
-      const body = new FormData();
       body.append("house", selectedHouse);
       body.append("screenshot", file);
 
