@@ -1,390 +1,253 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
-
-type Reward = {
-  points: number;
-  reward: string;
-};
-
-type HouseTask = {
-  house: string;
-  item: string;
-  pointsPerItem: number;
-  rewards: Reward[];
-  contributionPoints: number;
-  screenshotDataUrl?: string;
-  lastUpdated?: string;
-};
-
-type WeekData = {
-  weekKey: string;
-  houses: Record<string, HouseTask>;
-};
-
-const DEFAULT_HOUSES = [
-  "Atreides",
-  "Harkonnen",
-  "Corrino",
-  "Varota",
-  "Wallach",
-  "Imota",
-];
-
-const emptyTask = (house: string): HouseTask => ({
-  house,
-  item: "",
-  pointsPerItem: 0,
-  rewards: [],
-  contributionPoints: 0,
-});
-
-const getWeekKey = () => {
-  const now = new Date();
-  const start = new Date(now.getFullYear(), 0, 1);
-  const days = Math.floor(
-    (now.getTime() - start.getTime()) / (24 * 60 * 60 * 1000)
-  );
-  const week = Math.ceil((days + start.getDay() + 1) / 7);
-  return `${now.getFullYear()}-W${week}`;
-};
-
-const STORAGE_PREFIX = "landsraad-week";
-const OPENAI_STORAGE_KEY = "landsraad-openai-key";
-
-const loadWeekData = (weekKey: string): WeekData => {
-  if (typeof window === "undefined") {
-    return { weekKey, houses: {} };
-  }
-  const stored = window.localStorage.getItem(`${STORAGE_PREFIX}-${weekKey}`);
-  if (!stored) {
-    return { weekKey, houses: {} };
-  }
-  try {
-    return JSON.parse(stored) as WeekData;
-  } catch {
-    return { weekKey, houses: {} };
-  }
-};
-
-const saveWeekData = (data: WeekData) => {
-  if (typeof window === "undefined") {
-    return;
-  }
-  window.localStorage.setItem(
-    `${STORAGE_PREFIX}-${data.weekKey}`,
-    JSON.stringify(data)
-  );
-};
-
-const houseLabel = (house: string) => `Haus ${house}`;
+import { useState } from "react";
 
 export default function HomePage() {
-  const weekKey = useMemo(() => getWeekKey(), []);
-  const [weekData, setWeekData] = useState<WeekData>({
-    weekKey,
-    houses: {},
-  });
-  const [selectedHouse, setSelectedHouse] = useState("Varota");
-  const [uploading, setUploading] = useState(false);
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [openAiKey, setOpenAiKey] = useState<string | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
+  const [previews, setPreviews] = useState<string[]>([]);
+  const [apiKey, setApiKey] = useState("");
+  const [status, setStatus] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [resultJson, setResultJson] = useState<any | null>(null);
 
-  useEffect(() => {
-    const loaded = loadWeekData(weekKey);
-    const enriched: WeekData = {
-      weekKey,
-      houses: DEFAULT_HOUSES.reduce<Record<string, HouseTask>>((acc, house) => {
-        acc[house] = loaded.houses[house] ?? emptyTask(house);
-        return acc;
-      }, {}),
-    };
-    setWeekData(enriched);
-  }, [weekKey]);
-
-  useEffect(() => {
-    if (!weekData.weekKey) return;
-    saveWeekData(weekData);
-  }, [weekData]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    setOpenAiKey(window.localStorage.getItem(OPENAI_STORAGE_KEY));
-  }, []);
-
-  const updateHouse = (house: string, changes: Partial<HouseTask>) => {
-    setWeekData((prev) => ({
-      ...prev,
-      houses: {
-        ...prev.houses,
-        [house]: {
-          ...prev.houses[house],
-          ...changes,
-        },
-      },
-    }));
-  };
-
-  const handleRewardChange = (
-    house: string,
-    index: number,
-    key: keyof Reward,
-    value: string
-  ) => {
-    const current = weekData.houses[house]?.rewards ?? [];
-    const next = current.map((reward, idx) =>
-      idx === index
-        ? {
-            ...reward,
-            [key]: key === "points" ? Number(value) : value,
-          }
-        : reward
+  const handleFiles = async (ev: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFiles = Array.from(ev.target.files || []).filter(
+      (f) => f.type.startsWith("image/")
     );
-    updateHouse(house, { rewards: next });
-  };
+    
+    if (selectedFiles.length === 0) {
+      setStatus("Bitte nur Bilder hochladen (JPG, PNG, etc.)");
+      return;
+    }
 
-  const addReward = (house: string) => {
-    const current = weekData.houses[house]?.rewards ?? [];
-    updateHouse(house, {
-      rewards: [...current, { points: 0, reward: "" }],
-    });
-  };
+    setStatus("Laden Bilder...");
+    setResultJson(null);
+    const newPreviews: string[] = [];
 
-  const removeReward = (house: string, index: number) => {
-    const current = weekData.houses[house]?.rewards ?? [];
-    updateHouse(house, {
-      rewards: current.filter((_, idx) => idx !== index),
-    });
-  };
-
-  const handleUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    setUploading(true);
-    setStatusMessage(null);
-
-    const fileReader = new FileReader();
-    fileReader.onload = async () => {
-      const dataUrl = fileReader.result?.toString();
-      if (!dataUrl) {
-        setUploading(false);
-        setStatusMessage("Screenshot konnte nicht geladen werden.");
-        return;
+    try {
+      for (const file of selectedFiles) {
+        const imageUrl = await fileToDataUrl(file);
+        newPreviews.push(imageUrl);
       }
 
-      updateHouse(selectedHouse, {
-        screenshotDataUrl: dataUrl,
-        lastUpdated: new Date().toISOString(),
+      setFiles(selectedFiles);
+      setPreviews(newPreviews);
+      setStatus(`${selectedFiles.length} Bild(er) geladen.`);
+    } catch (error) {
+      setStatus(`Fehler beim Laden: ${String(error)}`);
+    }
+  };
+
+  const fileToDataUrl = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const removeImage = (index: number) => {
+    setFiles(files.filter((_, i) => i !== index));
+    setPreviews(previews.filter((_, i) => i !== index));
+  };
+
+  const handleAnalyze = async () => {
+    if (previews.length === 0) {
+      setStatus("Bitte zuerst Bilder hochladen.");
+      return;
+    }
+    if (!apiKey.trim()) {
+      setStatus("API-Key erforderlich.");
+      return;
+    }
+
+    setLoading(true);
+    setStatus("Sende Bilder zur Analyse...");
+    setResultJson(null);
+
+    try {
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          imageDataUrls: previews,
+          apiKey: apiKey.trim(),
+        }),
       });
 
-      const body = new FormData();
-      body.append("house", selectedHouse);
-      body.append("screenshot", file);
+      const data = await response.json();
+      console.log("response: ", response);
+      console.log("data: ", data);
 
-      try {
-        const headers = new Headers();
-        if (openAiKey) {
-          headers.set("x-openai-key", openAiKey);
-        }
-        const response = await fetch("/api/analyze", {
-          method: "POST",
-          headers,
-          body,
-        });
-        const payload = await response.json();
-        if (response.ok && payload?.task) {
-          updateHouse(selectedHouse, {
-            item: payload.task.item ?? "",
-            pointsPerItem: payload.task.pointsPerItem ?? 0,
-            rewards: payload.task.rewards ?? [],
-            lastUpdated: new Date().toISOString(),
-          });
-          setStatusMessage("Analyse erfolgreich gespeichert.");
-        } else {
-          setStatusMessage(
-            payload?.error ??
-              "Analyse fehlgeschlagen. Bitte Daten manuell ergänzen."
-          );
-        }
-      } catch (error) {
-        setStatusMessage("Verbindung zur Analyse fehlgeschlagen.");
-      } finally {
-        setUploading(false);
+      if (!response.ok) {
+        setStatus(`Fehler: ${data?.error || "Unbekannter Fehler"}`);
+        setResultJson(data);
+      } else {
+        setResultJson(data.result);
+        setStatus("Analyse erfolgreich!");
       }
-    };
-    fileReader.readAsDataURL(file);
+    } catch (err) {
+      setStatus("Fehler: " + String(err));
+      setResultJson({ error: String(err) });
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const activeTask = weekData.houses[selectedHouse];
-
   return (
-    <main>
-      <header>
-        <span className="kicker">Landsraad Term {weekKey}</span>
-        <h1>Landsraad Task Tracker</h1>
-        <p>
-          Lade den Wochenscreenshot pro Haus hoch, lass ihn von ChatGPT
-          auswerten und speichere deine aktuellen Contribution Points direkt im
-          Browser. Jede Woche wird automatisch separat im lokalen Speicher
-          geführt.
-        </p>
-      </header>
+    <main style={{ padding: 24, fontFamily: "Arial, sans-serif", maxWidth: 900 }}>
+      <h1>Dune Landsraad Screenshot Parser</h1>
+      <p style={{ color: "#666", marginBottom: 24 }}>
+        Lade 1 oder mehrere Landsraad-Screenshots hoch und schicke sie zur Analyse.
+      </p>
 
-      <section className="panel">
-        <div className="grid">
-          <div>
-            <h2>Screenshot Analyse</h2>
-            <p className="small">
-              Wähle ein Haus, lade den Screenshot hoch und aktualisiere die
-              Taskdaten. Falls die API nicht konfiguriert ist, kannst du die
-              Felder manuell befüllen.
-            </p>
-            <label htmlFor="house-select">Haus auswählen</label>
-            <select
-              id="house-select"
-              value={selectedHouse}
-              onChange={(event) => setSelectedHouse(event.target.value)}
-            >
-              {DEFAULT_HOUSES.map((house) => (
-                <option key={house} value={house}>
-                  {houseLabel(house)}
-                </option>
-              ))}
-            </select>
-
-            <label htmlFor="screenshot">Screenshot hochladen</label>
-            <input
-              id="screenshot"
-              type="file"
-              accept="image/*"
-              onChange={handleUpload}
-            />
-            <div className="badge">
-              <span>ChatGPT Analyse</span>
-              <span>{uploading ? "läuft" : "bereit"}</span>
-            </div>
-            {statusMessage && <p className="small">{statusMessage}</p>}
-            {activeTask?.screenshotDataUrl && (
-              <img
-                className="preview"
-                src={activeTask.screenshotDataUrl}
-                alt={`Screenshot für ${selectedHouse}`}
-              />
-            )}
-          </div>
-
-          <div>
-            <h2>Task Details bearbeiten</h2>
-            <label>Gesuchtes Item</label>
-            <input
-              value={activeTask?.item ?? ""}
-              onChange={(event) =>
-                updateHouse(selectedHouse, { item: event.target.value })
-              }
-              placeholder="z.B. Regis Drillshot FK7"
-            />
-            <label>Contribution Points pro Item</label>
-            <input
-              type="number"
-              value={activeTask?.pointsPerItem ?? 0}
-              onChange={(event) =>
-                updateHouse(selectedHouse, {
-                  pointsPerItem: Number(event.target.value),
-                })
-              }
-            />
-            <label>Aktuelle Contribution Points</label>
-            <input
-              type="number"
-              value={activeTask?.contributionPoints ?? 0}
-              onChange={(event) =>
-                updateHouse(selectedHouse, {
-                  contributionPoints: Number(event.target.value),
-                })
-              }
-            />
-            <p className="small">
-              Letztes Update: {activeTask?.lastUpdated ?? "Noch nicht gesetzt"}
-            </p>
-          </div>
+      <div style={{ marginBottom: 20, padding: 16, background: "#f5f5f5", borderRadius: 8 }}>
+        <div style={{ marginBottom: 12 }}>
+          <label>
+            <strong>API-Key (Hugging Face):</strong>
+          </label>
+          <input
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder="hf_..."
+            style={{
+              display: "block",
+              marginTop: 8,
+              padding: 8,
+              width: "100%",
+              boxSizing: "border-box",
+            }}
+          />
+          <p style={{ fontSize: 12, color: "#666", marginTop: 6 }}>
+            Hugging Face API Token von https://huggingface.co/settings/tokens
+          </p>
         </div>
-      </section>
+      </div>
 
-      <section className="panel">
-        <h2>Belohnungen pro Haus</h2>
-        <div className="grid">
-          {DEFAULT_HOUSES.map((house) => {
-            const task = weekData.houses[house];
-            return (
-              <div key={house} className="card">
-                <h3>{houseLabel(house)}</h3>
-                <p className="small">
-                  Gesuchtes Item: {task?.item || "Noch nicht erfasst"}
-                </p>
-                <p className="small">
-                  Punkte pro Item: {task?.pointsPerItem || 0}
-                </p>
-                <p className="small">
-                  Aktuelle Contribution Points: {task?.contributionPoints || 0}
-                </p>
-                <div className="reward-list">
-                  {(task?.rewards ?? []).map((reward, index) => (
-                    <div key={`${house}-${index}`} className="reward-row">
-                      <input
-                        type="number"
-                        value={reward.points}
-                        onChange={(event) =>
-                          handleRewardChange(
-                            house,
-                            index,
-                            "points",
-                            event.target.value
-                          )
-                        }
-                        placeholder="Punkte"
-                      />
-                      <input
-                        value={reward.reward}
-                        onChange={(event) =>
-                          handleRewardChange(
-                            house,
-                            index,
-                            "reward",
-                            event.target.value
-                          )
-                        }
-                        placeholder="Belohnung"
-                      />
-                      <button
-                        className="secondary"
-                        onClick={() => removeReward(house, index)}
-                      >
-                        Entfernen
-                      </button>
-                    </div>
-                  ))}
-                </div>
-                <div>
-                  <button onClick={() => addReward(house)}>
-                    Belohnung hinzufügen
+      <div style={{ marginBottom: 20, padding: 16, background: "#f9f9f9", borderRadius: 8 }}>
+        <label>
+          <strong>Bilder hochladen:</strong>
+        </label>
+        <input
+          type="file"
+          accept="image/*"
+          multiple
+          onChange={handleFiles}
+          style={{ display: "block", marginTop: 8 }}
+        />
+        <p style={{ fontSize: 12, color: "#666", marginTop: 6 }}>
+          JPG, PNG und andere Bildformate
+        </p>
+
+        {previews.length > 0 && (
+          <div style={{ marginTop: 16 }}>
+            <p style={{ fontWeight: "bold", marginBottom: 12 }}>
+              {previews.length} Bild(er) geladen:
+            </p>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))",
+                gap: 12,
+              }}
+            >
+              {previews.map((dataUrl, index) => (
+                <div
+                  key={index}
+                  style={{
+                    position: "relative",
+                    borderRadius: 4,
+                    overflow: "hidden",
+                    border: "1px solid #ddd",
+                  }}
+                >
+                  <img
+                    src={dataUrl}
+                    alt={`preview-${index}`}
+                    style={{
+                      width: "100%",
+                      height: 150,
+                      objectFit: "cover",
+                    }}
+                  />
+                  <div style={{ padding: 4, background: "#fff", textAlign: "center", fontSize: 12 }}>
+                    Bild {index + 1}
+                  </div>
+                  <button
+                    onClick={() => removeImage(index)}
+                    style={{
+                      position: "absolute",
+                      top: 4,
+                      right: 4,
+                      background: "rgba(0,0,0,0.6)",
+                      color: "white",
+                      border: "none",
+                      borderRadius: 4,
+                      padding: "4px 8px",
+                      cursor: "pointer",
+                      fontSize: 12,
+                    }}
+                  >
+                    ✕
                   </button>
                 </div>
-              </div>
-            );
-          })}
-        </div>
-      </section>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
 
-      <footer>
-        <p>
-          Tipp: Ohne API-Key speichert die App die Screenshots lokal und lässt
-          dich die Taskdaten manuell nachtragen. Für automatische Analyse den
-          API-Key in der{" "}
-          <Link href="/config">Konfiguration</Link> hinterlegen.
+      <div style={{ marginBottom: 20 }}>
+        <button
+          onClick={handleAnalyze}
+          disabled={loading || previews.length === 0}
+          style={{
+            padding: "10px 20px",
+            fontSize: 16,
+            cursor: loading || previews.length === 0 ? "not-allowed" : "pointer",
+            opacity: loading || previews.length === 0 ? 0.6 : 1,
+          }}
+        >
+          {loading ? "Analysiere..." : "Analysieren"}
+        </button>
+      </div>
+
+      {status && (
+        <p
+          style={{
+            marginBottom: 20,
+            padding: 12,
+            background: resultJson?.error ? "#ffe0e0" : "#e0f0ff",
+            color: resultJson?.error ? "#cc0000" : "#0066cc",
+            borderRadius: 4,
+          }}
+        >
+          {status}
         </p>
-      </footer>
+      )}
+
+      {resultJson && (
+        <div style={{ marginBottom: 20 }}>
+          <h2>Ergebnis</h2>
+          <pre
+            style={{
+              background: "#1e1e1e",
+              color: "#00ff00",
+              padding: 16,
+              borderRadius: 4,
+              overflowX: "auto",
+              maxHeight: 500,
+              overflowY: "auto",
+            }}
+          >
+            {JSON.stringify(resultJson, null, 2)}
+          </pre>
+        </div>
+      )}
     </main>
   );
 }
